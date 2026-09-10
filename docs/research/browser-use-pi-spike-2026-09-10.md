@@ -11,7 +11,7 @@ Follow-up to `browser-use-pi-eval-2026-09-09.md`. Question: does code-mode (pers
 
 ### Finding 0 — model routing
 
-`openai-codex-responses` models in `models.json` (e.g. `clawrouter/gpt-5.6-luna`) fail inside Browser Use Pi with `Failed to extract accountId from token`: pi-ai's codex transport wants a ChatGPT OAuth JWT, not a ClawRouter key. Interactive `pii` works because it has extra auth plumbing. Anthropic-messages and openai-completions models route fine. **For SDK use, pick a non-codex model id.**
+`openai-codex-responses` models in `models.json` (e.g. `clawrouter/gpt-5.6-luna`) fail inside Browser Use Pi with `Failed to extract accountId from token`: pi-ai's codex transport wants a ChatGPT OAuth JWT, not a ClawRouter key. Interactive `pii` works because pi-mono-fork honours `compat.sendChatgptAccountId: false`. **Fixed:** `scripts/patch-pi-ai.mjs` (postinstall) ports that guard into both installed `pi-ai` copies (top-level and the one nested under `pi-coding-agent`). Rerun with `clawrouter/gpt-5.6-luna`: 5/5 pass, 33 steps, 164s, $0.128.
 
 ## Results — 5 tasks, same model
 

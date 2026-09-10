@@ -2,9 +2,9 @@
 
 Use `provider/model`. Browser Use Pi uses upstream Pi’s pinned model catalog and transports; it does not fork the model loop or silently substitute models.
 
-**Default (this fork):** when `model` is omitted, `BROWSER_USE_MODEL` is used, else `DEFAULT_MODEL` = `clawrouter/claude-sonnet-5`. When `models` is omitted, the collection is loaded from Pi’s `models.json` + `auth.json` (`PI_CODING_AGENT_DIR`, default `~/.pi/vanilla-agent`), so custom providers such as `clawrouter/...` resolve without extra wiring; it falls back to pi-ai builtins if no `models.json` exists.
+**Default (this fork):** when `model` is omitted, `BROWSER_USE_MODEL` is used, else `DEFAULT_MODEL` = `clawrouter/gpt-5.6-luna`. When `models` is omitted, the collection is loaded from Pi’s `models.json` + `auth.json` (`PI_CODING_AGENT_DIR`, default `~/.pi/vanilla-agent`), so custom providers such as `clawrouter/...` resolve without extra wiring; it falls back to pi-ai builtins if no `models.json` exists.
 
-**ClawRouter caveat:** model ids whose `api` is `openai-codex-responses` (e.g. `clawrouter/gpt-5.6-luna`) fail with `Failed to extract accountId from token` — that transport wants a ChatGPT OAuth JWT. Use `anthropic-messages` or `openai-completions` ids (e.g. `clawrouter/claude-sonnet-5`, `clawrouter/xai/grok-4.6`).
+**Codex-route models via API key:** upstream pi-ai 0.85.1 requires a ChatGPT OAuth JWT for `openai-codex-responses`. `scripts/patch-pi-ai.mjs` (postinstall) makes the transport honour `compat.sendChatgptAccountId: false`, mirroring pi-mono-fork, so `clawrouter/gpt-5.6-luna` etc. work. Remove the patch when upstream ships it.
 
 | Example                              | Environment variable |
 | ------------------------------------ | -------------------- |
@@ -16,7 +16,7 @@ Use `provider/model`. Browser Use Pi uses upstream Pi’s pinned model catalog a
 Provider access depends on your account. A catalog entry is not proof of entitlement. Screenshot interpretation requires a vision model.
 
 ```js
-const agent = await BrowserUse.create({ reasoning: 'low' }); // clawrouter/claude-sonnet-5
+const agent = await BrowserUse.create({ reasoning: 'low' }); // clawrouter/gpt-5.6-luna
 const explicit = await BrowserUse.create({
   model: 'clawrouter/claude-opus-5',
   reasoning: 'xhigh',

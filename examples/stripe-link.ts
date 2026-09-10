@@ -14,7 +14,7 @@ const browser = () =>
     ? Browser.cloud({ apiKey: process.env.BROWSER_USE_API_KEY ?? '' })
     : Browser.chromium();
 const options = {
-  model: process.env.MODEL || 'clawrouter/claude-sonnet-5',
+  model: process.env.MODEL || 'clawrouter/gpt-5.6-luna',
   workspace: process.env.WORKSPACE || './artifacts/stripe-link',
   telemetry: false as const,
   log: false as const,

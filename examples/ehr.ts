@@ -3,7 +3,7 @@ import { Browser, BrowserUse, Type } from '@browser_use/pi';
 const url = process.env.EHR_URL;
 if (!url) throw new Error('Set EHR_URL to an EHR sandbox containing synthetic patient TEST-1001.');
 const agent = await BrowserUse.create({
-  model: process.env.MODEL || 'clawrouter/claude-sonnet-5',
+  model: process.env.MODEL || 'clawrouter/gpt-5.6-luna',
   browser:
     process.env.BROWSER === 'cloud'
       ? Browser.cloud({

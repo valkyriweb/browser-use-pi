@@ -15,7 +15,7 @@ await mkdir(workspace, { recursive: true });
 if (resolve(resume) !== join(workspace, 'resume.pdf'))
   await copyFile(resume, join(workspace, 'resume.pdf'));
 const agent = await BrowserUse.create({
-  model: process.env.MODEL || 'clawrouter/claude-sonnet-5',
+  model: process.env.MODEL || 'clawrouter/gpt-5.6-luna',
   browser:
     process.env.BROWSER === 'cloud'
       ? Browser.cloud({ apiKey: process.env.BROWSER_USE_API_KEY ?? '' })

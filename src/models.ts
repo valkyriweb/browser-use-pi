@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 /** Default model when none is given: ClawRouter via the local Pi models.json. */
-export const DEFAULT_MODEL = 'clawrouter/claude-sonnet-5';
+export const DEFAULT_MODEL = 'clawrouter/gpt-5.6-luna';
 
 let cached: Promise<Models> | undefined;
 

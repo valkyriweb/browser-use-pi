@@ -1,14 +1,14 @@
 {
-  "model": "clawrouter/claude-sonnet-5",
+  "model": "clawrouter/gpt-5.6-luna",
   "rows": [
     {
       "id": "ax-extract",
       "status": "completed",
       "pass": true,
-      "steps": 2,
-      "ms": 5765,
-      "cost": 0.0170388,
-      "tokens": 7110,
+      "steps": 4,
+      "ms": 19382,
+      "cost": 0.0112886,
+      "tokens": 10981,
       "output": {
         "products": [
           {
@@ -26,10 +26,10 @@
       "id": "form-flow",
       "status": "completed",
       "pass": true,
-      "steps": 8,
-      "ms": 21234,
-      "cost": 0.0412086,
-      "tokens": 35443,
+      "steps": 12,
+      "ms": 59077,
+      "cost": 0.0634532,
+      "tokens": 71798,
       "output": {
         "status": "Saved 2 time(s)",
         "visibleProducts": 1
@@ -39,10 +39,10 @@
       "id": "iframe-shadow",
       "status": "completed",
       "pass": true,
-      "steps": 6,
-      "ms": 14305,
-      "cost": 0.0312684,
-      "tokens": 25585,
+      "steps": 8,
+      "ms": 39056,
+      "cost": 0.0281396,
+      "tokens": 25622,
       "output": {
         "reference": "REF-7731",
         "shadowLabel": "Shadow done"
@@ -52,10 +52,10 @@
       "id": "newtab-download",
       "status": "completed",
       "pass": true,
-      "steps": 4,
-      "ms": 15337,
-      "cost": 0.0333918,
-      "tokens": 20114,
+      "steps": 6,
+      "ms": 28910,
+      "cost": 0.018543,
+      "tokens": 16533,
       "output": {
         "detailsPath": "/details",
         "rows": [
@@ -72,12 +72,24 @@
     },
     {
       "id": "partial-checkpoint",
-      "status": "max_steps",
-      "pass": false,
+      "status": "completed",
+      "pass": true,
       "steps": 3,
-      "ms": 10455,
-      "cost": 0.034095,
-      "tokens": 11132
+      "ms": 17644,
+      "cost": 0.006398,
+      "tokens": 5423,
+      "output": {
+        "products": [
+          {
+            "name": "Atlas",
+            "price": 29
+          },
+          {
+            "name": "Orbit",
+            "price": 49
+          }
+        ]
+      }
     }
   ]
 }
