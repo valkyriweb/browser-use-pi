@@ -17,8 +17,8 @@ export interface BrowserUseOptions extends DomainOptions {
   sensitiveData?: SensitiveData;
   /** Anonymous run counters. Disable with false, DO_NOT_TRACK=1 or ANONYMIZED_TELEMETRY=false. */
   telemetry?: boolean;
-  /** provider/model ID, e.g. openai/gpt-5.4. No model is silently substituted. */
-  model: string;
+  /** provider/model ID, e.g. clawrouter/claude-sonnet-5. Defaults to BROWSER_USE_MODEL or DEFAULT_MODEL. */
+  model?: string;
   browser?: BrowserOptions;
   /** Persistent output directory. Defaults to a new OS temporary directory. */
   workspace?: string;

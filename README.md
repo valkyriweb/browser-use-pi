@@ -28,7 +28,7 @@ export BROWSER_USE_API_KEY=...
 import { Browser, BrowserUse } from '@browser_use/pi';
 
 const agent = await BrowserUse.create({
-  model: 'openrouter/openai/gpt-5.6-luna',
+  model: 'clawrouter/claude-sonnet-5',
   reasoning: 'xhigh',
   browser: Browser.cloud({ apiKey: process.env.BROWSER_USE_API_KEY! }),
   workspace: './work',

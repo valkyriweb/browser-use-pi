@@ -1,0 +1,11 @@
+```json
+{"results":[
+  {"id":"ax-extract","output":{"products":[{"name":"Atlas","price":29},{"name":"Orbit","price":49}]},"toolCalls":2},
+  {"id":"form-flow","output":{"status":"Saved 2 time(s)","visibleProducts":1},"toolCalls":7},
+  {"id":"iframe-shadow","output":{"referenceFieldText":"REF-7731","shadowButtonLabel":"Shadow done"},"toolCalls":3},
+  {"id":"newtab-download","output":{"newTabPath":"/details","csvRows":[{"name":"Atlas","price":29},{"name":"Orbit","price":49}]},"toolCalls":5},
+  {"id":"partial-checkpoint","output":[{"name":"Atlas","price":29},{"name":"Orbit","price":49}],"toolCalls":0}
+]}
+```
+
+Browser session stopped (`chrome-devtools-axi stop`) after all tasks completed.

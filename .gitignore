@@ -11,3 +11,9 @@ python/build/
 python/*.egg-info/
 **/__pycache__/
 .venv/
+spike/workspace/
+spike/baseline/url.txt
+spike/baseline/pid
+spike/baseline/out.txt
+spike/baseline/err*.txt
+spike/baseline/time*.txt

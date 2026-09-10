@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /** Private versioned stdio bridge. stdout is protocol-only; no shell or HTTP server. */
 import { BrowserUse, exportRecording, type BrowserUseOptions } from './index.js';
-import { builtinModels } from '@earendil-works/pi-ai/providers/all';
+import { DEFAULT_MODEL, defaultModels } from './models.js';
 import { Type, type TSchema } from 'typebox';
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 
@@ -117,13 +117,14 @@ async function dispatch(method: string, params: Record<string, unknown>): Promis
       if (!CREATE_KEYS.has(key)) throw new Error(`Unsupported create option: ${key}`);
     creating = true;
     try {
+      params.model ??= process.env.BROWSER_USE_MODEL ?? DEFAULT_MODEL;
       if (typeof params.model !== 'string') throw new Error('model must be provider/model.');
       const { apiKey, baseUrl, tools: rawTools, ...options } = params;
       if (apiKey !== undefined && typeof apiKey !== 'string')
         throw new Error('apiKey must be a string.');
       if (baseUrl !== undefined && typeof baseUrl !== 'string')
         throw new Error('baseUrl must be a string.');
-      const models = builtinModels();
+      const models = await defaultModels();
       const toolSpecs = (rawTools ?? []) as {
         name: string;
         description: string;

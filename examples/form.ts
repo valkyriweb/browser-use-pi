@@ -1,7 +1,7 @@
 import { Browser, BrowserUse, Type } from '@browser_use/pi';
 
 const agent = await BrowserUse.create({
-  model: process.env.MODEL || 'openrouter/openai/gpt-5.6-luna',
+  model: process.env.MODEL || 'clawrouter/claude-sonnet-5',
   browser:
     process.env.BROWSER === 'cloud'
       ? Browser.cloud({ apiKey: process.env.BROWSER_USE_API_KEY ?? '' })
