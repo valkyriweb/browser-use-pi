@@ -99,7 +99,7 @@ class BrowserUse:
     async def create(
         cls,
         *,
-        model: str,
+        model: str | None = None,
         tools: list[Tool] | None = None,
         node: str | None = None,
         server_path: str | Path | None = None,
@@ -172,7 +172,11 @@ class BrowserUse:
                 for t in self._tools.values()
             ]
             result = await asyncio.wait_for(
-                self._call("create", {"model": model, **options, "tools": specs}), 30
+                self._call(
+                    "create",
+                    {**({"model": model} if model is not None else {}), **options, "tools": specs},
+                ),
+                30,
             )
             self.workspace = result["workspace"]
             return self

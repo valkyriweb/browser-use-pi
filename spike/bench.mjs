@@ -4,7 +4,9 @@ import { writeFile, mkdir } from 'node:fs/promises';
 import { Type } from 'typebox';
 import { BrowserUse } from '../dist/index.js';
 import { startFixture } from '../test/fixture.mjs';
-import { loadLukeModels, DEFAULT_MODEL } from './models.mjs';
+import { defaultModels, DEFAULT_MODEL as PKG_DEFAULT_MODEL } from '../dist/index.js';
+
+const DEFAULT_MODEL = process.env.SPIKE_MODEL ?? PKG_DEFAULT_MODEL;
 
 process.env.DO_NOT_TRACK = '1';
 
@@ -58,7 +60,7 @@ const tasks = [
 ];
 
 const only = new Set(process.argv.slice(2));
-const models = await loadLukeModels();
+const models = await defaultModels();
 const fixture = await startFixture();
 const rows = [];
 await mkdir('spike/workspace', { recursive: true });

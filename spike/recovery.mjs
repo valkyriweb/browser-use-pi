@@ -1,9 +1,11 @@
 // Step 2c: worker killed by cell timeout mid-task — does the run recover?
 import { BrowserUse } from '../dist/index.js';
 import { startFixture } from '../test/fixture.mjs';
-import { loadLukeModels, DEFAULT_MODEL } from './models.mjs';
+import { defaultModels, DEFAULT_MODEL as PKG_DEFAULT_MODEL } from '../dist/index.js';
+
+const DEFAULT_MODEL = process.env.SPIKE_MODEL ?? PKG_DEFAULT_MODEL;
 process.env.DO_NOT_TRACK = '1';
-const models = await loadLukeModels();
+const models = await defaultModels();
 const f = await startFixture();
 const agent = await BrowserUse.create({ model: DEFAULT_MODEL, models, reasoning: 'low', telemetry: false, log: 'pretty', workspace: 'spike/workspace/recovery', cellTimeoutMs: 1500 });
 try {

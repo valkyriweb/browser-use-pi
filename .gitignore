@@ -14,6 +14,6 @@ python/*.egg-info/
 spike/workspace/
 spike/baseline/url.txt
 spike/baseline/pid
-spike/baseline/out.txt
+spike/baseline/out*.txt
 spike/baseline/err*.txt
 spike/baseline/time*.txt

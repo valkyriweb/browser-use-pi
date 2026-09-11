@@ -1,11 +1,13 @@
 // Step 1: prove the Browser Use Pi loop works on Luke's stack.
 // Local Chrome only, telemetry off, model via ClawRouter.
 import { BrowserUse } from '../dist/index.js';
-import { loadLukeModels, DEFAULT_MODEL } from './models.mjs';
+import { defaultModels, DEFAULT_MODEL as PKG_DEFAULT_MODEL } from '../dist/index.js';
+
+const DEFAULT_MODEL = process.env.SPIKE_MODEL ?? PKG_DEFAULT_MODEL;
 
 process.env.DO_NOT_TRACK = '1';
 
-const models = await loadLukeModels();
+const models = await defaultModels();
 const model = DEFAULT_MODEL;
 const [provider, id] = model.split('/');
 if (!models.getModel(provider, id)) {

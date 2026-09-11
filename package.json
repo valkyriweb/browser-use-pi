@@ -17,6 +17,7 @@
   "files": [
     "dist",
     "examples",
+    "scripts/patch-pi-ai.mjs",
     "README.md",
     "LICENSE",
     ".env.example"
