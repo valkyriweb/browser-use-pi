@@ -8,6 +8,7 @@ Use `provider/model`. Browser Use Pi uses upstream Pi’s pinned model catalog a
 
 | Example                              | Environment variable |
 | ------------------------------------ | -------------------- |
+| `clawrouter/gpt-5.6-luna` (default)  | via Pi `models.json` |
 | `openrouter/openai/gpt-5.6-luna`     | `OPENROUTER_API_KEY` |
 | `openrouter/openai/gpt-6-astra`      | `OPENROUTER_API_KEY` |
 | `openrouter/anthropic/claude-opus-5` | `OPENROUTER_API_KEY` |

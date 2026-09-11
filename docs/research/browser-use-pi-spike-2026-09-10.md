@@ -5,7 +5,7 @@ Follow-up to `browser-use-pi-eval-2026-09-09.md`. Question: does code-mode (pers
 ## Setup
 
 - Checkout `e0df274`, built locally (`npm run build`). Harness in `spike/`.
-- Model for both sides: `clawrouter/claude-sonnet-5`, reasoning `low`, via Luke's `~/.pi/vanilla-agent/models.json` loaded through `ModelRuntime` (`spike/models.mjs`). No OpenRouter key, no Browser Use Cloud, `telemetry: false` + `DO_NOT_TRACK=1`.
+- Model for both sides: `clawrouter/claude-sonnet-5`, reasoning `low`, via Luke's `~/.pi/vanilla-agent/models.json` loaded through `ModelRuntime` (`defaultModels()`, exported from the package). No OpenRouter key, no Browser Use Cloud, `telemetry: false` + `DO_NOT_TRACK=1`.
 - Target: the repo's own local fixture (`test/fixture.mjs`) — search form, select, two-click state, iframe, shadow DOM, `target=_blank` tab, CSV download. Served on 127.0.0.1; no external sites, no credentials.
 - Baseline: a headless `pi -p` session with the `chrome-devtools-axi` skill, same 5 tasks in one prompt, same model/thinking.
 
@@ -45,8 +45,8 @@ Both sides solved every task. Browser Use Pi was ~3× faster and ~45% cheaper on
 **Adopt for a narrow slot: scripted, multi-step browser jobs run as a child process, not as a Pi skill replacement.** On this evidence it is materially faster and cheaper than the tool-call path for anything beyond 2–3 actions, and its recovery/checkpoint semantics are the best I've seen for unattended work. Keep `chrome-devtools-axi`/PinchTab for interactive "look at this page" work from a live session.
 
 Concrete next steps (in order):
-1. Wrap `spike/models.mjs` + `BrowserUse.create` into a tiny `bu-run <task> [--schema]` CLI so a Pi session or Harbor lane can shell out to it. Reuse `spike/bench.mjs` as its smoke test.
+1. Wrap `defaultModels()` + `BrowserUse.create` into a tiny `bu-run <task> [--schema]` CLI so a Pi session or Harbor lane can shell out to it. Reuse `spike/bench.mjs` as its smoke test.
 2. Re-run the bench with per-task fresh baseline sessions to get an honest cost delta; add one real-site task with a throwaway `profileDir`.
 3. Decide sandboxing: run the CLI inside the existing sandbox-runner if tasks may touch untrusted pages.
 
-Artifacts: `spike/{models,smoke,bench,followup,recovery}.mjs`, `spike/results.json`, `spike/baseline/{prompt.md,out2.txt,time2.txt}`, run journals under `spike/workspace/*/.browser-use/runs/`.
+Artifacts: `spike/{smoke,bench,followup,recovery}.mjs`, `spike/results.json`, `spike/baseline/prompt.md`, run journals under `spike/workspace/*/.browser-use/runs/`. Raw baseline captures (`spike/baseline/out*.txt`, `time*.txt`) are gitignored run output, not tracked artifacts.
