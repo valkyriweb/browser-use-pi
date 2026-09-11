@@ -176,6 +176,42 @@ async function executable(options: LocalBrowserOptions) {
   );
 }
 
+/**
+ * Chromium commits its cookie SQLite store during an orderly shutdown only. A signalled
+ * exit (even SIGTERM, which exits 0 in ~50ms) skips that commit, so persistent cookies set
+ * in the session are lost while localStorage and IndexedDB — flushed eagerly — survive.
+ * Asking the browser to close over CDP is what makes the store durable.
+ */
+async function requestGracefulShutdown(endpoint: string, timeoutMs: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(endpoint);
+    } catch {
+      return resolve();
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      try {
+        socket.close();
+      } catch {}
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    socket.addEventListener('open', () => {
+      try {
+        socket.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+      } catch {
+        finish();
+      }
+    });
+    // Either the acknowledgement or the browser dropping the socket means shutdown began.
+    socket.addEventListener('message', finish, { once: true });
+    socket.addEventListener('close', finish, { once: true });
+    socket.addEventListener('error', finish, { once: true });
+  });
+}
+
 /** Local Chrome has an isolated temporary profile; external Chrome always belongs to the caller. */
 export async function openBrowser(options: BrowserOptions = {}) {
   if (options.kind !== undefined && !['cloud', 'chrome', 'chromium'].includes(options.kind))
@@ -231,14 +267,23 @@ export async function openBrowser(options: BrowserOptions = {}) {
     launchError = error;
   });
   let closing: Promise<void> | undefined;
+  let endpoint: string | undefined;
+  const escalationMs = 2000;
   const close = () =>
     (closing ??= (async () => {
       if (child.exitCode === null && child.signalCode === null && child.pid) {
         const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-        child.kill('SIGTERM');
-        const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
-        await exited;
-        clearTimeout(timer);
+        // Let Chromium flush its cookie store, bounded, before falling back to signals.
+        if (endpoint) {
+          await requestGracefulShutdown(endpoint, escalationMs);
+          await Promise.race([exited, delay(escalationMs, undefined, { ref: false })]);
+        }
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGTERM');
+          const timer = setTimeout(() => child.kill('SIGKILL'), escalationMs);
+          await exited;
+          clearTimeout(timer);
+        } else await exited;
       }
       await lock.close();
       await rm(lockPath, { force: true });
@@ -256,7 +301,10 @@ export async function openBrowser(options: BrowserOptions = {}) {
         const [port, path] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8'))
           .trim()
           .split('\n');
-        if (port && path) return { endpoint: `ws://127.0.0.1:${port}${path}`, close };
+        if (port && path) {
+          endpoint = `ws://127.0.0.1:${port}${path}`;
+          return { endpoint, close };
+        }
       } catch {}
       await delay(50);
     }
