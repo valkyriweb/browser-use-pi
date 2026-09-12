@@ -98,11 +98,18 @@ export function run(log = console) {
   let failed = 0;
   for (const file of files) {
     const { changed, missing, unpatched } = patchFile(file);
-    if (unpatched) {
-      log.error(`patch-pi-ai: anchors present but unpatched in ${file}`);
-      failed++;
-    } else if (missing && !changed) {
-      log.error(`patch-pi-ai: anchor not found in ${file}`);
+    // Any surviving unpatched anchor, or any anchor we could not find at all, fails the
+    // file. `missing` alone is decisive: an already-patched edit hits `continue` before
+    // the missing++ branch, so missing > 0 always means a genuinely absent anchor, never
+    // a benign already-patched state. Guarding on `missing && !changed` would let partial
+    // drift (one anchor renamed upstream, one intact) pass silently with changed=1,
+    // missing=1 -- shipping a half-patched transport.
+    if (unpatched || missing) {
+      log.error(
+        unpatched
+          ? `patch-pi-ai: anchors present but unpatched in ${file}`
+          : `patch-pi-ai: anchor not found in ${file}${changed ? ' (partial drift: some anchors applied, others absent)' : ''}`,
+      );
       failed++;
     } else {
       log.log(`patch-pi-ai: ${file} ${changed ? 'patched' : 'already patched'}`);

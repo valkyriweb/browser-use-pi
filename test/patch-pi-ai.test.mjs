@@ -32,6 +32,20 @@ const DRIFTED = `export function build(model, apiKey, headers) {
   return headers;
 }
 `;
+// Only the SECOND anchor renamed upstream; the first still applies cleanly.
+const PARTIAL_DRIFT_SECOND = `export function build(model, apiKey, headers) {
+  const accountId = extractAccountId(apiKey);
+  headers.append("chatgpt-account-id", accountId);
+  return headers;
+}
+`;
+// Only the FIRST anchor renamed upstream; the second still applies cleanly.
+const PARTIAL_DRIFT_FIRST = `export function build(model, apiKey, headers) {
+  const accountId = readAccountFromToken(apiKey);
+  headers.set("chatgpt-account-id", accountId);
+  return headers;
+}
+`;
 
 /** pi-ai's real shape: ESM-only, and package.json deliberately NOT exported. */
 const PI_AI_PKG = {
@@ -185,6 +199,30 @@ test('fails loudly when anchors have drifted in ANY reachable copy', async () =>
     await f.cleanup();
   }
 });
+
+// Regression: run() previously guarded with `missing && !changed`, so partial drift
+// (changed=1, missing=1) was FALSE and the file passed with exit 0 -- shipping a
+// half-patched transport where accountId can be undefined. Both-anchors-drifted still
+// failed loudly, which is why this slipped through. Both orderings are covered because
+// the two anchors are evaluated in sequence.
+for (const [label, body] of [
+  ['second anchor renamed', PARTIAL_DRIFT_SECOND],
+  ['first anchor renamed', PARTIAL_DRIFT_FIRST],
+]) {
+  test(`fails loudly on partial drift (${label}), not just when every anchor drifts`, async () => {
+    const f = await fixture({ nested: body });
+    try {
+      const out = f.run();
+      assert.equal(out.status, 1, `partial drift must fail loudly, got exit ${out.status}`);
+      assert.match(out.stderr, /anchor not found|unpatched/);
+      assert.match(out.stderr, /drifted/);
+      // The surviving original anchor must not be silently reported as a success.
+      assert.doesNotMatch(out.stdout, /already patched.*pi-coding-agent/);
+    } finally {
+      await f.cleanup();
+    }
+  });
+}
 
 test('fails when a copy is left containing unpatched anchors', async () => {
   const f = await fixture({});
