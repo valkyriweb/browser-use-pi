@@ -1,7 +1,9 @@
 import { mkdir, mkdtemp, open } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { builtinModels } from '@earendil-works/pi-ai/providers/all';
+import { defaultModels, resolveDefaultModel } from './models.js';
+
+type ResolvedOptions = BrowserUseOptions & { model: string };
 import { randomUUID } from 'node:crypto';
 import type { AgentMessage, StreamFn } from '@earendil-works/pi-agent-core';
 import type { Api, Model, Usage } from '@earendil-works/pi-ai';
@@ -37,6 +39,12 @@ export { CellError } from './runtime.js';
 export type { AgentTool, AgentEvent, StreamFn } from '@earendil-works/pi-agent-core';
 export { Type, type Static, type TSchema } from 'typebox';
 export { builtinModels } from '@earendil-works/pi-ai/providers/all';
+export {
+  BUILTIN_DEFAULT_MODEL,
+  DEFAULT_MODEL,
+  defaultModels,
+  resolveDefaultModel,
+} from './models.js';
 
 /** One browser, workspace and JavaScript namespace. run() resets context; followUp() retains it. */
 export class BrowserUse {
@@ -57,7 +65,7 @@ export class BrowserUse {
   private hasConversation = false;
 
   private constructor(
-    private readonly config: BrowserUseOptions & { streamFn: StreamFn },
+    private readonly config: ResolvedOptions & { streamFn: StreamFn },
     private readonly model: Model<Api>,
     private readonly runtime: BrowserRuntime,
     private readonly browser: Awaited<ReturnType<typeof openBrowser>>,
@@ -66,18 +74,22 @@ export class BrowserUse {
     this.reportRun = telemetry(config.telemetry, config.browser);
   }
 
-  static async create(options: BrowserUseOptions): Promise<BrowserUse> {
+  static async create(input: BrowserUseOptions): Promise<BrowserUse> {
+    if (input.model !== undefined && typeof input.model !== 'string')
+      throw new Error('model must be provider/model, for example openai/gpt-5.4.');
+    const models = input.models ?? (await defaultModels());
+    const options: ResolvedOptions = {
+      ...input,
+      model: input.model || resolveDefaultModel(models),
+    };
     if (options.telemetry !== undefined && typeof options.telemetry !== 'boolean')
       throw new Error('telemetry must be boolean.');
     navigationPolicy(options);
     validateSensitiveData(options.sensitiveData);
-    options = {
-      ...options,
-      redact: [
-        ...(options.redact ?? []),
-        ...Object.values(options.sensitiveData ?? {}).map((secret) => secret.value),
-      ],
-    };
+    options.redact = [
+      ...(options.redact ?? []),
+      ...Object.values(options.sensitiveData ?? {}).map((secret) => secret.value),
+    ];
     if (options.highlightActions !== undefined && typeof options.highlightActions !== 'boolean')
       throw new Error('highlightActions must be boolean.');
     if (options.researchTools !== undefined && typeof options.researchTools !== 'boolean')
@@ -99,7 +111,6 @@ export class BrowserUse {
     positiveInteger('compactionTimeoutMs', options.compactionTimeoutMs ?? 120_000);
     const separator = options.model.indexOf('/');
     if (separator < 1) throw new Error('model must be provider/model, for example openai/gpt-5.4.');
-    const models = options.models ?? builtinModels();
     const provider = options.model.slice(0, separator);
     const resolvedModel = models.getModel(provider, options.model.slice(separator + 1));
     // Pi 0.85.1 sends configuration_update via Messages, which OpenRouter Opus 5 rejects.

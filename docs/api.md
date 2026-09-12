@@ -6,7 +6,7 @@
 
 ```js
 import { BrowserUse, Type } from '@browser_use/pi';
-const agent = await BrowserUse.create({ model: 'openrouter/openai/gpt-5.6-luna' });
+const agent = await BrowserUse.create({ model: 'clawrouter/gpt-5.6-luna' });
 try {
   const result = await agent.run('Read the page title at example.com.', {
     schema: Type.Object({ title: Type.String() }),
@@ -54,7 +54,7 @@ The default output is a string. Schema validation checks shape; `validateResult(
 
 ```js
 const agent = await BrowserUse.create({
-  model: 'openrouter/openai/gpt-5.6-luna',
+  model: 'clawrouter/gpt-5.6-luna',
   beforeToolCall: async ({ toolCall }) => {
     if (toolCall.name === 'purchase') return { block: true, reason: 'Needs review' };
   },

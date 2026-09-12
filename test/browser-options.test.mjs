@@ -1,6 +1,6 @@
 import test, { mock } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, rm, readFile, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Browser, openBrowser, chromeProfileDirs } from '../dist/browser.js';
@@ -182,3 +182,85 @@ test(
     }
   },
 );
+
+// Only an orderly shutdown reliably writes Chromium's cookie SQLite store, so closing an
+// owned browser must let it do that. Reading the file proves the store was
+// committed rather than merely re-reported from a still-warm process. Only `encrypted_value`
+// is encrypted: `host_key` and `name` stay readable, so a byte scan is enough.
+test('closing an owned browser commits its cookie store to the profile on disk', async () => {
+  const profile = await mkdtemp(join(tmpdir(), 'bu-flush-'));
+  let browser;
+  let cdp;
+  try {
+    browser = await openBrowser(Browser.chromium({ profileDir: profile }));
+    cdp = await CDP.connect(browser.endpoint);
+    await cdp.send('Storage.setCookies', {
+      cookies: [
+        {
+          name: 'flushed',
+          value: 'fixture-flush',
+          domain: 'flush.example',
+          path: '/',
+          expires: Date.now() / 1000 + 3600,
+        },
+      ],
+    });
+    cdp.close();
+    cdp = undefined;
+    await browser.close();
+    browser = undefined;
+
+    const store = join(profile, 'Default', 'Cookies');
+    assert.ok((await stat(store)).size > 0, 'cookie store should exist after close');
+    const bytes = await readFile(store);
+    assert.ok(
+      bytes.includes(Buffer.from('flush.example')) && bytes.includes(Buffer.from('flushed')),
+      'persistent cookie should be committed to the on-disk store by an orderly shutdown',
+    );
+  } finally {
+    cdp?.close();
+    await browser?.close();
+    await rm(profile, { recursive: true, force: true });
+  }
+});
+
+// close() releases the profile lock and is safe to call more than once; a caller that
+// closes twice must not be left unable to reopen the same profile.
+test('closing an owned browser releases the profile lock and is idempotent', async () => {
+  const profile = await mkdtemp(join(tmpdir(), 'bu-lock-'));
+  let reopened;
+  try {
+    const browser = await openBrowser(Browser.chromium({ profileDir: profile }));
+    await browser.close();
+    await browser.close();
+    await assert.rejects(stat(join(profile, '.bu-pi.lock')), 'lock file should be removed');
+
+    reopened = await openBrowser(Browser.chromium({ profileDir: profile }));
+    assert.match(reopened.endpoint, /^ws:\/\/127\.0\.0\.1:\d+\//);
+  } finally {
+    await reopened?.close();
+    await rm(profile, { recursive: true, force: true });
+  }
+});
+
+// The graceful shutdown request must only ever reach a browser we own. Closing a handle
+// obtained for an existing endpoint must leave that browser running for its real owner.
+test('closing a caller-supplied endpoint never shuts down the browser behind it', async () => {
+  const profile = await mkdtemp(join(tmpdir(), 'bu-foreign-'));
+  let owned;
+  let cdp;
+  try {
+    owned = await openBrowser(Browser.chromium({ profileDir: profile }));
+    const attached = await openBrowser({ cdpUrl: owned.endpoint });
+    assert.equal(attached.endpoint, owned.endpoint);
+    await attached.close();
+
+    // Still serving CDP, so `Browser.close` was never sent on its behalf.
+    cdp = await CDP.connect(owned.endpoint);
+    assert.ok((await cdp.send('Browser.getVersion')).product);
+  } finally {
+    cdp?.close();
+    await owned?.close();
+    await rm(profile, { recursive: true, force: true });
+  }
+});

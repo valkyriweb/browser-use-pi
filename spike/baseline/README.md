@@ -1,0 +1,1 @@
+Baseline: same 5 tasks driven by a Pi session with the chrome-devtools-axi skill (tool-call browser control), same model, against the same local fixture. Fixture is served by spike/baseline/serve.mjs.

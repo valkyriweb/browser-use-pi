@@ -17,11 +17,13 @@
   "files": [
     "dist",
     "examples",
+    "scripts/patch-pi-ai.mjs",
     "README.md",
     "LICENSE",
     ".env.example"
   ],
   "scripts": {
+    "postinstall": "node scripts/patch-pi-ai.mjs",
     "build": "node -e \"require('node:fs').rmSync('dist', {recursive:true, force:true})\" && tsc -p tsconfig.build.json",
     "check": "tsc --noEmit",
     "test": "npm run build && node --test --test-concurrency=1 test/*.test.mjs",

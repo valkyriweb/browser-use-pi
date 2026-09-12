@@ -16,7 +16,7 @@ from browser_use_next import BrowserUse
 
 async def main():
     async with await BrowserUse.create(
-        model='openrouter/openai/gpt-5.6-luna',
+        model='clawrouter/gpt-5.6-luna',
         workspace='./work',
     ) as agent:
         result = await agent.run('Find the top story on Hacker News.')

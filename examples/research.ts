@@ -3,7 +3,7 @@ import { Browser, BrowserUse } from '@browser_use/pi';
 const task = process.argv.slice(2).join(' ');
 if (!task) throw new Error('Usage: node examples/research.ts "Your browser task"');
 const agent = await BrowserUse.create({
-  model: process.env.MODEL || 'openrouter/openai/gpt-5.6-luna',
+  model: process.env.MODEL || 'clawrouter/gpt-5.6-luna',
   browser:
     process.env.BROWSER === 'cloud'
       ? Browser.cloud({ apiKey: process.env.BROWSER_USE_API_KEY ?? '' })

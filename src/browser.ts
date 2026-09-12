@@ -176,6 +176,45 @@ async function executable(options: LocalBrowserOptions) {
   );
 }
 
+/**
+ * An orderly shutdown reliably commits Chromium's cookie SQLite store. A signalled exit
+ * (even SIGTERM, which exits 0 in ~50ms) usually does not: it can beat the commit, so
+ * persistent cookies set in the session are typically lost while localStorage and IndexedDB
+ * — flushed eagerly — survive. Neither outcome is guaranteed, because Chromium's own lazy
+ * commit timer can occasionally land a row first; seeing a cookie survive a signalled exit
+ * is that race, not evidence this close path is unnecessary.
+ */
+async function requestGracefulShutdown(endpoint: string, remainingMs: () => number): Promise<void> {
+  if (remainingMs() <= 0) return;
+  await new Promise<void>((resolve) => {
+    let socket: WebSocket;
+    try {
+      socket = new WebSocket(endpoint);
+    } catch {
+      return resolve();
+    }
+    const finish = () => {
+      clearTimeout(timer);
+      try {
+        socket.close();
+      } catch {}
+      resolve();
+    };
+    const timer = setTimeout(finish, remainingMs());
+    socket.addEventListener('open', () => {
+      try {
+        socket.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
+      } catch {
+        finish();
+      }
+    });
+    // Either the acknowledgement or the browser dropping the socket means shutdown began.
+    socket.addEventListener('message', finish, { once: true });
+    socket.addEventListener('close', finish, { once: true });
+    socket.addEventListener('error', finish, { once: true });
+  });
+}
+
 /** Local Chrome has an isolated temporary profile; external Chrome always belongs to the caller. */
 export async function openBrowser(options: BrowserOptions = {}) {
   if (options.kind !== undefined && !['cloud', 'chrome', 'chromium'].includes(options.kind))
@@ -231,19 +270,37 @@ export async function openBrowser(options: BrowserOptions = {}) {
     launchError = error;
   });
   let closing: Promise<void> | undefined;
+  let endpoint: string | undefined;
   const close = () =>
     (closing ??= (async () => {
       if (child.exitCode === null && child.signalCode === null && child.pid) {
         const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-        child.kill('SIGTERM');
-        const timer = setTimeout(() => child.kill('SIGKILL'), 2000);
-        await exited;
-        clearTimeout(timer);
+        // One deadline spans every stage below, so total close time stays bounded at 2s
+        // however the browser misbehaves; each stage only gets what the previous left.
+        const closeBy = Date.now() + 2000;
+        const remainingMs = () => closeBy - Date.now();
+        // Only an orderly shutdown reliably commits the cookie store, so ask for one first.
+        if (endpoint) {
+          await requestGracefulShutdown(endpoint, remainingMs);
+          if (remainingMs() > 0)
+            await Promise.race([exited, delay(remainingMs(), undefined, { ref: false })]);
+        }
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill('SIGTERM');
+          // A browser past the deadline is already wedged: SIGKILL it without further grace.
+          const timer = setTimeout(() => child.kill('SIGKILL'), Math.max(remainingMs(), 0));
+          await exited;
+          clearTimeout(timer);
+        } else await exited;
       }
       await lock.close();
       await rm(lockPath, { force: true });
       if (!persistent) await rm(profile, { recursive: true, force: true });
-    })());
+    })().catch((error) => {
+      // Never cache a failed teardown: the caller must be able to retry it.
+      closing = undefined;
+      throw error;
+    }));
   try {
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
@@ -256,13 +313,17 @@ export async function openBrowser(options: BrowserOptions = {}) {
         const [port, path] = (await readFile(join(profile, 'DevToolsActivePort'), 'utf8'))
           .trim()
           .split('\n');
-        if (port && path) return { endpoint: `ws://127.0.0.1:${port}${path}`, close };
+        if (port && path) {
+          endpoint = `ws://127.0.0.1:${port}${path}`;
+          return { endpoint, close };
+        }
       } catch {}
       await delay(50);
     }
     throw new Error('Chrome did not expose CDP within 15000 ms.');
   } catch (error) {
-    await close();
+    // Cleanup failure must not replace the launch error that actually explains the failure.
+    await close().catch(() => {});
     throw error;
   }
 }

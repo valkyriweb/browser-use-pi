@@ -4,7 +4,7 @@ import { join } from 'node:path';
 const url = process.env.START_URL;
 if (!url) throw new Error('Set START_URL to your staging site.');
 const agent = await BrowserUse.create({
-  model: process.env.MODEL || 'openrouter/openai/gpt-5.6-luna',
+  model: process.env.MODEL || 'clawrouter/gpt-5.6-luna',
   browser:
     process.env.BROWSER === 'cloud'
       ? Browser.cloud({ apiKey: process.env.BROWSER_USE_API_KEY ?? '' })
