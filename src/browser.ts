@@ -177,10 +177,12 @@ async function executable(options: LocalBrowserOptions) {
 }
 
 /**
- * Chromium commits its cookie SQLite store during an orderly shutdown only. A signalled
- * exit (even SIGTERM, which exits 0 in ~50ms) skips that commit, so persistent cookies set
- * in the session are lost while localStorage and IndexedDB — flushed eagerly — survive.
- * Asking the browser to close over CDP is what makes the store durable.
+ * An orderly shutdown reliably commits Chromium's cookie SQLite store. A signalled exit
+ * (even SIGTERM, which exits 0 in ~50ms) usually does not: it can beat the commit, so
+ * persistent cookies set in the session are typically lost while localStorage and IndexedDB
+ * — flushed eagerly — survive. Neither outcome is guaranteed, because Chromium's own lazy
+ * commit timer can occasionally land a row first; seeing a cookie survive a signalled exit
+ * is that race, not evidence this close path is unnecessary.
  */
 async function requestGracefulShutdown(endpoint: string, remainingMs: () => number): Promise<void> {
   if (remainingMs() <= 0) return;
@@ -277,7 +279,7 @@ export async function openBrowser(options: BrowserOptions = {}) {
         // however the browser misbehaves; each stage only gets what the previous left.
         const closeBy = Date.now() + 2000;
         const remainingMs = () => closeBy - Date.now();
-        // Chromium commits its cookie store only on an orderly shutdown, so ask first.
+        // Only an orderly shutdown reliably commits the cookie store, so ask for one first.
         if (endpoint) {
           await requestGracefulShutdown(endpoint, remainingMs);
           if (remainingMs() > 0)

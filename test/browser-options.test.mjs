@@ -183,8 +183,8 @@ test(
   },
 );
 
-// Chromium writes its cookie SQLite store only while shutting down in an orderly way, so
-// closing an owned browser must let it do that. Reading the file proves the store was
+// Only an orderly shutdown reliably writes Chromium's cookie SQLite store, so closing an
+// owned browser must let it do that. Reading the file proves the store was
 // committed rather than merely re-reported from a still-warm process. Only `encrypted_value`
 // is encrypted: `host_key` and `name` stay readable, so a byte scan is enough.
 test('closing an owned browser commits its cookie store to the profile on disk', async () => {
