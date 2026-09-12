@@ -182,7 +182,8 @@ async function executable(options: LocalBrowserOptions) {
  * in the session are lost while localStorage and IndexedDB — flushed eagerly — survive.
  * Asking the browser to close over CDP is what makes the store durable.
  */
-async function requestGracefulShutdown(endpoint: string, timeoutMs: number): Promise<void> {
+async function requestGracefulShutdown(endpoint: string, remainingMs: () => number): Promise<void> {
+  if (remainingMs() <= 0) return;
   await new Promise<void>((resolve) => {
     let socket: WebSocket;
     try {
@@ -197,7 +198,7 @@ async function requestGracefulShutdown(endpoint: string, timeoutMs: number): Pro
       } catch {}
       resolve();
     };
-    const timer = setTimeout(finish, timeoutMs);
+    const timer = setTimeout(finish, remainingMs());
     socket.addEventListener('open', () => {
       try {
         socket.send(JSON.stringify({ id: 1, method: 'Browser.close' }));
@@ -268,19 +269,24 @@ export async function openBrowser(options: BrowserOptions = {}) {
   });
   let closing: Promise<void> | undefined;
   let endpoint: string | undefined;
-  const escalationMs = 2000;
   const close = () =>
     (closing ??= (async () => {
       if (child.exitCode === null && child.signalCode === null && child.pid) {
         const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-        // Let Chromium flush its cookie store, bounded, before falling back to signals.
+        // One deadline spans every stage below, so total close time stays bounded at 2s
+        // however the browser misbehaves; each stage only gets what the previous left.
+        const closeBy = Date.now() + 2000;
+        const remainingMs = () => closeBy - Date.now();
+        // Chromium commits its cookie store only on an orderly shutdown, so ask first.
         if (endpoint) {
-          await requestGracefulShutdown(endpoint, escalationMs);
-          await Promise.race([exited, delay(escalationMs, undefined, { ref: false })]);
+          await requestGracefulShutdown(endpoint, remainingMs);
+          if (remainingMs() > 0)
+            await Promise.race([exited, delay(remainingMs(), undefined, { ref: false })]);
         }
         if (child.exitCode === null && child.signalCode === null) {
           child.kill('SIGTERM');
-          const timer = setTimeout(() => child.kill('SIGKILL'), escalationMs);
+          // A browser past the deadline is already wedged: SIGKILL it without further grace.
+          const timer = setTimeout(() => child.kill('SIGKILL'), Math.max(remainingMs(), 0));
           await exited;
           clearTimeout(timer);
         } else await exited;
@@ -288,7 +294,11 @@ export async function openBrowser(options: BrowserOptions = {}) {
       await lock.close();
       await rm(lockPath, { force: true });
       if (!persistent) await rm(profile, { recursive: true, force: true });
-    })());
+    })().catch((error) => {
+      // Never cache a failed teardown: the caller must be able to retry it.
+      closing = undefined;
+      throw error;
+    }));
   try {
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
@@ -310,7 +320,8 @@ export async function openBrowser(options: BrowserOptions = {}) {
     }
     throw new Error('Chrome did not expose CDP within 15000 ms.');
   } catch (error) {
-    await close();
+    // Cleanup failure must not replace the launch error that actually explains the failure.
+    await close().catch(() => {});
     throw error;
   }
 }
