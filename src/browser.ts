@@ -275,8 +275,13 @@ export async function openBrowser(options: BrowserOptions = {}) {
     (closing ??= (async () => {
       if (child.exitCode === null && child.signalCode === null && child.pid) {
         const exited = new Promise<void>((resolve) => child.once('exit', () => resolve()));
-        // One deadline spans every stage below, so total close time stays bounded at 2s
-        // however the browser misbehaves; each stage only gets what the previous left.
+        // One deadline spans the two stages that wait on the browser -- the CDP graceful
+        // shutdown and the SIGTERM grace period -- so each only gets what the previous
+        // left, and SIGKILL is issued the moment the budget runs out. It bounds those
+        // waits, not the whole close: awaiting the killed process's exit, releasing the
+        // lock, and removing the profile directory all happen afterwards and are
+        // untimed. SIGKILL cannot be trapped, so the exit wait ends promptly in practice,
+        // but that is the kernel's guarantee rather than this deadline's.
         const closeBy = Date.now() + 2000;
         const remainingMs = () => closeBy - Date.now();
         // Only an orderly shutdown reliably commits the cookie store, so ask for one first.
