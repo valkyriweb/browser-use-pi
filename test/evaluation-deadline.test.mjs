@@ -4,25 +4,36 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { openBrowser } from '../dist/browser.js';
 import { CDP, Page } from '../dist/index.js';
 
+// The 200 ms below is the *evaluation* deadline under test, applied per command. It is
+// deliberately not the connection budget: opening a socket to a freshly launched Chrome
+// regularly costs more than 200 ms on a loaded machine, which used to fail these tests
+// before any assertion ran. Connecting on the default budget keeps the deadline short
+// where it matters without making the timing of the assertion depend on machine load.
+const EVALUATION_DEADLINE_MS = 200;
+
 test('a timed-out synchronous page evaluation stops in Chrome without replaying or undoing prior effects', async () => {
   const chrome = await openBrowser();
   let cdp;
   try {
-    cdp = await CDP.connect(chrome.endpoint, 200);
+    cdp = await CDP.connect(chrome.endpoint);
     const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
     const page = await Page.attach(cdp, targetId);
     await page.evaluate(() => {
       window.effects = { before: 0, after: 0 };
     });
     await assert.rejects(
-      page.evaluate(() => {
-        window.effects.before++;
-        const until = Date.now() + 1200;
-        while (Date.now() < until) {
-          /* finite CPU-bound fixture */
-        }
-        window.effects.after++;
-      }),
+      page.evaluate(
+        () => {
+          window.effects.before++;
+          const until = Date.now() + 1200;
+          while (Date.now() < until) {
+            /* finite CPU-bound fixture */
+          }
+          window.effects.after++;
+        },
+        undefined,
+        { timeoutMs: EVALUATION_DEADLINE_MS },
+      ),
       /exceeded|terminated|timed out/i,
     );
     // The socket deadline alone rejects the promise but leaves Chrome executing.
@@ -48,15 +59,19 @@ test('evaluation deadlines do not claim cancellation of asynchronous page work',
   const chrome = await openBrowser();
   let cdp;
   try {
-    cdp = await CDP.connect(chrome.endpoint, 200);
+    cdp = await CDP.connect(chrome.endpoint);
     const { targetId } = await cdp.send('Target.createTarget', { url: 'about:blank' });
     const page = await Page.attach(cdp, targetId);
     await assert.rejects(
-      page.evaluate(async () => {
-        window.delayed = 0;
-        await new Promise((resolve) => setTimeout(resolve, 700));
-        window.delayed++;
-      }),
+      page.evaluate(
+        async () => {
+          window.delayed = 0;
+          await new Promise((resolve) => setTimeout(resolve, 700));
+          window.delayed++;
+        },
+        undefined,
+        { timeoutMs: EVALUATION_DEADLINE_MS },
+      ),
       /exceeded|terminated|timed out/i,
     );
     assert.equal(await page.evaluate('window.delayed'), 0);

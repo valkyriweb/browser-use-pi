@@ -164,12 +164,16 @@ export class CDP {
     method: M,
     params: Commands[M]['paramsType'][0] = {} as Commands[M]['paramsType'][0],
     sessionId?: string,
+    // A command deadline is not the connection budget: establishing a socket and running
+    // one command are unrelated costs, and a caller may legitimately want a short deadline
+    // on a connection that was slow to open. Defaults to the connection value.
+    timeoutMs?: number,
   ): Promise<Commands[M]['returnType']> {
     // Capture the observer at dispatch, so late responses cannot enter a later cell.
     const observe = this.observeResponse;
     const result = this.endpoint
-      ? await (await this.connected()).send(method, params, sessionId)
-      : await this.sendMessage(method, params, sessionId);
+      ? await (await this.connected()).send(method, params, sessionId, timeoutMs)
+      : await this.sendMessage(method, params, sessionId, timeoutMs);
     if (method === 'Target.attachToTarget') {
       const attached = result as Commands['Target.attachToTarget']['returnType'];
       const target = (params as Commands['Target.attachToTarget']['paramsType'][0]).targetId;
@@ -214,6 +218,7 @@ export class CDP {
     method: M,
     params: Commands[M]['paramsType'][0],
     sessionId?: string,
+    timeoutMs?: number,
   ): Promise<Commands[M]['returnType']> {
     if (!this.socket || this.socket.readyState !== WebSocket.OPEN)
       return Promise.reject(new Error('CDP connection is closed.'));
@@ -231,12 +236,13 @@ export class CDP {
         if (error) reject(error);
         else resolve(value as Commands[M]['returnType']);
       };
+      const deadlineMs = positiveInteger('timeoutMs', timeoutMs ?? this.timeoutMs);
       const timer = setTimeout(
         () =>
           finish(
-            new Error(`CDP ${method} exceeded ${this.timeoutMs} ms; the action may have happened.`),
+            new Error(`CDP ${method} exceeded ${deadlineMs} ms; the action may have happened.`),
           ),
-        this.timeoutMs,
+        deadlineMs,
       );
       this.pending.set(id, {
         resolve: (value) => finish(undefined, value),

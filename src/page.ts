@@ -83,9 +83,10 @@ export class Page {
   >(
     method: M,
     params?: import('devtools-protocol/types/protocol-mapping.js').ProtocolMapping.Commands[M]['paramsType'][0],
+    timeoutMs?: number,
   ) {
     await this.ready();
-    return this.connection.send(method, params, this.sessionId);
+    return this.connection.send(method, params, this.sessionId, timeoutMs);
   }
   async goto(url: string) {
     const result = await this.cdp('Page.navigate', { url });
@@ -99,19 +100,28 @@ export class Page {
   async evaluate<T, A = undefined>(
     fn: ((argument: A) => T) | string,
     argument?: A,
+    options: { timeoutMs?: number } = {},
   ): Promise<Awaited<T>> {
     const expression =
       typeof fn === 'string'
         ? fn
         : `(${fn.toString()})(${JSON.stringify(argument) ?? 'undefined'})`;
-    const response = await this.cdp('Runtime.evaluate', {
-      expression,
-      // Bound synchronous execution in Chrome too; rejecting a CDP promise does not stop it.
-      timeout: this.connection.timeoutMs,
-      awaitPromise: true,
-      returnByValue: true,
-      userGesture: true,
-    });
+    // One deadline governs both sides: Chrome stops executing at `timeout`, and the CDP
+    // command rejects on the same budget. Passing only the former would leave a rejected
+    // promise while Chrome ran on; only the latter would leave Chrome burning CPU.
+    const timeoutMs = positiveInteger('timeoutMs', options.timeoutMs ?? this.connection.timeoutMs);
+    const response = await this.cdp(
+      'Runtime.evaluate',
+      {
+        expression,
+        // Bound synchronous execution in Chrome too; rejecting a CDP promise does not stop it.
+        timeout: timeoutMs,
+        awaitPromise: true,
+        returnByValue: true,
+        userGesture: true,
+      },
+      timeoutMs,
+    );
     if (response.exceptionDetails)
       throw new Error(
         response.exceptionDetails.exception?.description ?? response.exceptionDetails.text,
