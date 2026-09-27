@@ -282,7 +282,8 @@ export async function openBrowser(options: BrowserOptions = {}) {
         // lock, and removing the profile directory all happen afterwards and are
         // untimed. SIGKILL cannot be trapped, so the exit wait ends promptly in practice,
         // but that is the kernel's guarantee rather than this deadline's.
-        const closeBy = Date.now() + 2000;
+        const closeStartedAt = Date.now();
+        const closeBy = closeStartedAt + 2000;
         const remainingMs = () => closeBy - Date.now();
         // Only an orderly shutdown reliably commits the cookie store, so ask for one first.
         if (endpoint) {
@@ -291,6 +292,10 @@ export async function openBrowser(options: BrowserOptions = {}) {
             await Promise.race([exited, delay(remainingMs(), undefined, { ref: false })]);
         }
         if (child.exitCode === null && child.signalCode === null) {
+          if (endpoint)
+            console.warn(
+              `Graceful CDP shutdown did not observe child exit after ${Date.now() - closeStartedAt}ms; falling back to SIGTERM`,
+            );
           child.kill('SIGTERM');
           // A browser past the deadline is already wedged: SIGKILL it without further grace.
           const timer = setTimeout(() => child.kill('SIGKILL'), Math.max(remainingMs(), 0));
