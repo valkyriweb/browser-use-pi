@@ -53,7 +53,10 @@
     "vitepress": "^1.6.4"
   },
   "overrides": {
-    "vite": "6.4.3"
+    "@earendil-works/pi-coding-agent": {
+      "undici": "8.12.3"
+    },
+    "vite": "6.4.5"
   },
   "repository": {
     "type": "git",

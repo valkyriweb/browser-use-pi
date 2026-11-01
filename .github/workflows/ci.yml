@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    env:
+      DO_NOT_TRACK: "1"
+      ANONYMIZED_TELEMETRY: "false"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run check
+      - name: Check browser fixture prerequisite
+        run: test -x /usr/bin/google-chrome || test -x /usr/bin/chromium || test -x /usr/bin/chromium-browser
+      - name: Prepare video fixture tools
+        run: |
+          npm install --prefix "$RUNNER_TEMP/video-tools" --no-audit --no-fund ffmpeg-static@5.3.0 ffprobe-static@3.1.0
+          node --input-type=commonjs <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const root = path.join(process.env.RUNNER_TEMP, 'video-tools');
+          const bin = path.join(root, 'bin');
+          fs.mkdirSync(bin, { recursive: true });
+          fs.symlinkSync(require(path.join(root, 'node_modules/ffmpeg-static')), path.join(bin, 'ffmpeg'));
+          fs.symlinkSync(require(path.join(root, 'node_modules/ffprobe-static')).path, path.join(bin, 'ffprobe'));
+          fs.appendFileSync(process.env.GITHUB_PATH, `${bin}\n`);
+          NODE
+      - name: Check video fixture prerequisites
+        run: |
+          ffmpeg -version
+          ffprobe -version
+      - run: npm test
+      - run: npm run docs:build
