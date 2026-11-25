@@ -94,6 +94,7 @@ class BrowserUse:
         self._stderr = ""
         self._closed = False
         self._closing: asyncio.Task[None] | None = None
+        self._configuring = False
 
     @classmethod
     async def create(
@@ -105,6 +106,19 @@ class BrowserUse:
         server_path: str | Path | None = None,
         **options: Any,
     ) -> BrowserUse:
+        agent = await cls.start(tools=tools, node=node, server_path=server_path)
+        return await agent.configure(model=model, **options)
+
+    @classmethod
+    async def start(
+        cls,
+        *,
+        tools: list[Tool] | None = None,
+        node: str | None = None,
+        server_path: str | Path | None = None,
+    ) -> BrowserUse:
+        """Start the Node runtime without a session, so a host can boot it while it
+        prepares the options; `configure` then creates the session."""
         self = cls()
         for tool in tools or []:
             if tool.name in self._tools:
@@ -163,6 +177,17 @@ class BrowserUse:
             version = tuple(int(part) for part in ping["node"].split(".")[:2])
             if version < (22, 19):
                 raise BrowserUseError("Node.js 22.19+ is required.")
+            return self
+        except BaseException:
+            await self.close()
+            raise
+
+    async def configure(self, *, model: str, **options: Any) -> Self:
+        """Create the session on a runtime from `start`; closes it on failure, like `create`."""
+        if self._configuring:
+            raise BrowserUseError("Session is already configured.")
+        self._configuring = True
+        try:
             specs = [
                 {
                     "name": t.name,
@@ -385,18 +410,37 @@ class BrowserUse:
     async def export_recording(self, path: str, **options: Any) -> str:
         return await self._call("exportRecording", {"path": path, "options": options})
 
-    async def close(self) -> None:
+    async def current_target(self) -> str | None:
+        return await self._call("currentTarget")
+
+    async def connect_browser(self, cdp_url: str, *, target_id: str | None = None) -> None:
+        """Attach the browser of a session configured with browser={"kind": "pending"}
+        (optionally with "timeoutMs", how long a browser cell waits for it; default 60 s).
+        The model may already be running; its first browser cell waits for this."""
+        params: dict[str, Any] = {"cdpUrl": cdp_url}
+        if target_id:
+            params["targetId"] = target_id
+        await self._call("connectBrowser", params)
+
+    async def close(self, *, keep_tabs: bool | str = False) -> None:
+        """keep_tabs leaves the tabs this session opened for a later session;
+        "current" keeps only the tab the agent is on."""
         if self._closing is None:
-            self._closing = asyncio.create_task(self._close())
+            self._closing = asyncio.create_task(self._close(keep_tabs))
         await asyncio.shield(self._closing)
 
-    async def _close(self) -> None:
+    async def _close(self, keep_tabs: bool | str = False) -> None:
         if self._closed:
             return
         try:
             if self._process and self._process.returncode is None:
                 try:
-                    await asyncio.wait_for(self._call("close"), 10)
+                    # A runtime that never received `create` has no session to close.
+                    if self._configuring:
+                        await asyncio.wait_for(
+                            self._call("close", {"keepTabs": keep_tabs} if keep_tabs else None),
+                            10,
+                        )
                 except (BrowserUseError, ConnectionError, asyncio.TimeoutError) as exc:
                     self._stderr = (self._stderr + f"\nGraceful close failed: {exc}")[
                         -16000:

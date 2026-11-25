@@ -51,8 +51,9 @@ export class BrowserRuntime {
     this.runId = randomUUID();
     this.partial = undefined;
   }
+  /** The tab the agent last worked in: resumed next session, kept by keepTabs 'current'. */
   get currentTarget() {
-    return this.targetId;
+    return this.activeTarget ?? this.targetId;
   }
   async initialize(signal?: AbortSignal) {
     await this.execute('await page.info()', 4 * this.config.operationTimeoutMs, signal);
@@ -60,6 +61,7 @@ export class BrowserRuntime {
   }
   private worker: ChildProcess | undefined;
   private owned = new Set<string>();
+  private activeTarget: string | undefined;
   private targetId: string | undefined;
   private busy = false;
   private workerLoss: Error | undefined;
@@ -68,12 +70,62 @@ export class BrowserRuntime {
   private release: (() => void) | undefined;
   private pending: ((error: Error) => void) | undefined;
 
+  private connected: Promise<void> | undefined;
+  private markConnected: (() => void) | undefined;
+  private abandonConnect: ((error: Error) => void) | undefined;
+
   constructor(
     private readonly config: WorkerConfig,
     private readonly executable?: string,
-  ) {}
+  ) {
+    // An empty endpoint is a pending browser: cells wait for connect().
+    if (!config.endpoint) {
+      this.connected = new Promise((resolve, reject) => {
+        this.markConnected = resolve;
+        this.abandonConnect = reject;
+      });
+      this.connected.catch(() => {}); // rejected only by close(); a waiter reports it
+    }
+  }
 
-  private async start(signal?: AbortSignal): Promise<ChildProcess> {
+  get endpoint() {
+    return this.config.endpoint;
+  }
+
+  /** Attach the browser a pending runtime was created without; once only. */
+  connect(endpoint: string, targetId?: string) {
+    if (this.closed) throw new Error('BrowserUse is closed.');
+    if (this.config.endpoint) throw new Error('This session already has a browser.');
+    this.config.endpoint = endpoint;
+    if (targetId) this.config.targetId = targetId;
+    this.markConnected?.();
+  }
+
+  private async waitForBrowser(timeoutMs: number, signal?: AbortSignal) {
+    if (this.config.endpoint || !this.connected) return;
+    let timer: NodeJS.Timeout | undefined;
+    let abort: (() => void) | undefined;
+    try {
+      await Promise.race([
+        this.connected,
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(
+            () => reject(new Error(`No browser was connected within ${timeoutMs} ms.`)),
+            timeoutMs,
+          );
+          abort = () => reject(new Error('Execution cancelled.'));
+          signal?.addEventListener('abort', abort, { once: true });
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+      if (abort) signal?.removeEventListener('abort', abort);
+    }
+  }
+
+  private async start(signal: AbortSignal | undefined, waitMs: number): Promise<ChildProcess> {
+    if (this.worker) return this.worker;
+    await this.waitForBrowser(this.config.browserWaitMs ?? waitMs, signal);
     if (this.worker) return this.worker;
     const execPath = this.executable ?? (await workerExecutable());
     const worker = fork(new URL('./worker.js', import.meta.url), [], {
@@ -89,6 +141,8 @@ export class BrowserRuntime {
         this.partial = { path: message.path, value: JSON.parse(message.valueJson) };
       if (message.type === 'action') this.onAction?.(message.action);
       if (message.type === 'owned') this.owned.add(message.targetId);
+      // A switched browser survives a worker restart.
+      if (message.type === 'endpoint') this.config.endpoint = message.endpoint;
     });
     worker.on('error', (error) => this.pending?.(error));
     worker.on('exit', (code, signal) => {
@@ -133,8 +187,8 @@ export class BrowserRuntime {
         else resolve(value);
       };
       const message = (value: WorkerResponse) => {
-        if (value.type !== 'owned' && value.type !== 'action' && value.type !== 'partial')
-          finish(value);
+        // Side messages a cell sends while running; only its result or error ends it.
+        if (!['owned', 'action', 'partial', 'endpoint'].includes(value.type)) finish(value);
       };
       const abort = () =>
         finish(
@@ -191,13 +245,18 @@ export class BrowserRuntime {
       this.release = resolve;
     });
     try {
-      const worker = await this.start(signal);
+      const worker = await this.start(signal, timeoutMs);
       if (signal?.aborted) throw new Error('Execution cancelled.');
       const directory = join(this.config.workspace, '.browser-use', 'cells');
       await mkdir(directory, { recursive: true, mode: 0o700 });
       const outputFile = join(directory, `${randomUUID()}.txt`);
       await writeFile(outputFile, '', { flag: 'wx', mode: 0o600 });
-      const response = this.receive(worker, timeoutMs, signal);
+      // Ultrafast prints the page state after the cell's code, so its cells may run up to 10 s past timeoutMs.
+      const response = this.receive(
+        worker,
+        timeoutMs + (this.config.mode === 'ultrafast' ? 10_000 : 0),
+        signal,
+      );
       worker.send(
         { type: 'execute', code, captureJson, outputFile, runId: this.runId },
         (error) => {
@@ -218,6 +277,9 @@ export class BrowserRuntime {
       }
       if ((message.type === 'result' || message.type === 'error') && message.result?.targetId)
         this.targetId = message.result.targetId;
+      // Unset once the worker reports none, e.g. after that tab closed: never a dead target.
+      if (message.type === 'result' || message.type === 'error')
+        this.activeTarget = message.result?.activeTargetId;
       if (message.type === 'error')
         throw new CellError(message.message, message.result ?? { text: '', images: [] }, false);
       if (message.type !== 'result') throw new Error('Unexpected browser worker response.');
@@ -239,9 +301,13 @@ export class BrowserRuntime {
     }
   }
 
-  async close() {
+  /** keepTabs leaves the tabs this session opened for a later session to continue in;
+   * 'current' keeps only the tab the agent is on, so scratch tabs do not pile up. */
+  async close({ keepTabs = false }: { keepTabs?: boolean | 'current' } = {}) {
     if (this.closed) return;
     this.closed = true;
+    // A cell still waiting for a pending browser ends now, not at its deadline.
+    this.abandonConnect?.(new Error('BrowserUse closed before a browser was connected.'));
     if (this.busy) {
       this.pending?.(new Error('BrowserUse closed during execution.'));
       await this.terminate();
@@ -255,7 +321,10 @@ export class BrowserRuntime {
       await response.catch(() => {});
     }
     await this.terminate();
-    if (this.owned.size) {
+    // The primary page too: code can keep `page` as its main tab while working in another.
+    const kept = new Set(keepTabs === 'current' ? [this.targetId, this.activeTarget] : []);
+    for (const targetId of kept) if (targetId) this.owned.delete(targetId);
+    if (this.owned.size && keepTabs !== true) {
       const cdp = await CDP.connect(
         this.config.endpoint,
         this.config.operationTimeoutMs,
@@ -268,7 +337,8 @@ export class BrowserRuntime {
         while (previous !== this.owned.size) {
           previous = this.owned.size;
           for (const target of targetInfos)
-            if (target.openerId && this.owned.has(target.openerId)) this.owned.add(target.targetId);
+            if (target.openerId && this.owned.has(target.openerId) && !kept.has(target.targetId))
+              this.owned.add(target.targetId);
         }
         for (const targetId of this.owned) {
           if (targetInfos.some((t) => t.targetId === targetId))

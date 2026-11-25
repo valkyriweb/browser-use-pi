@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, open } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, type FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { defaultModels, resolveDefaultModel } from './models.js';
@@ -10,7 +10,7 @@ import type { Api, Model, Usage } from '@earendil-works/pi-ai';
 import { Type, type Static, type TSchema } from 'typebox';
 import { navigationPolicy, validateSensitiveData } from './policy.js';
 import { telemetry } from './telemetry.js';
-import { openBrowser } from './browser.js';
+import { openBrowser, validCdpUrl } from './browser.js';
 import { BrowserRuntime, workerExecutable } from './runtime.js';
 import { runAgent, zeroUsage } from './agent.js';
 import { Recorder } from './recording.js';
@@ -26,7 +26,14 @@ import { EventStream, formatEvent, type SessionEvent, type SessionEventData } fr
 import { positiveInteger } from './protocol.js';
 import type { BrowserUseOptions, RunOptions, RunResult } from './types.js';
 
-export type { BrowserUseOptions, RunOptions, RunResult, StopReason, RunMetrics } from './types.js';
+export type {
+  BrowserUseOptions,
+  RunOptions,
+  RunResult,
+  StopReason,
+  RunMetrics,
+  ContextMetrics,
+} from './types.js';
 export { Browser } from './browser.js';
 export type {
   BrowserOptions,
@@ -89,11 +96,34 @@ export class BrowserUse {
     options.redact = [
       ...(options.redact ?? []),
       ...Object.values(options.sensitiveData ?? {}).map((secret) => secret.value),
+      ...(options.webSearch ? [options.webSearch.token] : []),
     ];
     if (options.highlightActions !== undefined && typeof options.highlightActions !== 'boolean')
       throw new Error('highlightActions must be boolean.');
     if (options.researchTools !== undefined && typeof options.researchTools !== 'boolean')
       throw new Error('researchTools must be boolean.');
+    if (options.shellTimeoutMs !== undefined)
+      positiveInteger('shellTimeoutMs', options.shellTimeoutMs);
+    if (options.browserSwitching !== undefined && typeof options.browserSwitching !== 'boolean')
+      throw new Error('browserSwitching must be boolean.');
+    if (options.dedicatedBrowser !== undefined && typeof options.dedicatedBrowser !== 'boolean')
+      throw new Error('dedicatedBrowser must be boolean.');
+    if (options.focusTab !== undefined && typeof options.focusTab !== 'boolean')
+      throw new Error('focusTab must be boolean.');
+    if (
+      options.shellEnv !== undefined &&
+      (typeof options.shellEnv !== 'object' ||
+        options.shellEnv === null ||
+        Object.values(options.shellEnv).some((value) => typeof value !== 'string'))
+    )
+      throw new Error('shellEnv must map names to strings.');
+    if (options.mode !== undefined && options.mode !== 'default' && options.mode !== 'ultrafast')
+      throw new Error("mode must be 'default' or 'ultrafast'.");
+    if (
+      options.webSearch !== undefined &&
+      (typeof options.webSearch?.url !== 'string' || typeof options.webSearch?.token !== 'string')
+    )
+      throw new Error('webSearch must be {url, token}.');
     if (options.recording && typeof options.recording === 'object') {
       positiveInteger('recording.intervalMs', options.recording.intervalMs ?? 750);
       positiveInteger('recording.maxFrames', options.recording.maxFrames ?? 400);
@@ -109,6 +139,7 @@ export class BrowserUse {
     positiveInteger('hookTimeoutMs', options.hookTimeoutMs ?? 30_000);
     positiveInteger('modelTimeoutMs', options.modelTimeoutMs ?? 300_000);
     positiveInteger('compactionTimeoutMs', options.compactionTimeoutMs ?? 120_000);
+    positiveInteger('compactionRetryDelayMs', options.compactionRetryDelayMs ?? 1000);
     const separator = options.model.indexOf('/');
     if (separator < 1) throw new Error('model must be provider/model, for example openai/gpt-5.4.');
     const provider = options.model.slice(0, separator);
@@ -151,7 +182,17 @@ export class BrowserUse {
     const browser = await openBrowser(options.browser);
     const runtime = new BrowserRuntime(
       {
+        mode: options.mode ?? 'default',
+        ...(options.webSearch ? { webSearch: options.webSearch } : {}),
         endpoint: browser.endpoint,
+        ...(options.browser?.kind === 'pending'
+          ? {
+              browserWaitMs: positiveInteger(
+                'browser.timeoutMs',
+                options.browser.timeoutMs ?? 60_000,
+              ),
+            }
+          : {}),
         ...(options.allowedDomains !== undefined ? { allowedDomains: options.allowedDomains } : {}),
         ...(options.prohibitedDomains !== undefined
           ? { prohibitedDomains: options.prohibitedDomains }
@@ -165,6 +206,9 @@ export class BrowserUse {
         ...(options.browser && 'targetId' in options.browser && options.browser.targetId
           ? { targetId: options.browser.targetId }
           : {}),
+        ...(options.focusTab ? { focusTab: true } : {}),
+        ...(options.browserSwitching ? { browserSwitching: true } : {}),
+        ...(options.dedicatedBrowser ? { dedicatedBrowser: true } : {}),
         workspace,
         operationTimeoutMs,
         maxOutputChars,
@@ -243,10 +287,45 @@ export class BrowserUse {
     const historyPath = join(directory, `${this.runId}.json`);
     const eventsPath = join(directory, `${this.runId}.jsonl`);
     let recorder: Recorder | undefined;
-    let journal: Awaited<ReturnType<typeof open>> | undefined;
+    let journal: FileHandle | undefined;
+    let journalFailure: string | undefined;
+    let recoveryCheckpoint = false;
+    let journalQueue = Promise.resolve();
+    // The journal is diagnostics, never a run's outcome. A handle held open across a long model
+    // call goes stale on some network mounts (EBADF on write, EIO on close): reopen it once for
+    // the failed write; after a second failure stop journaling with one warning.
+    const stopJournal = async (error: unknown) => {
+      await journal?.close().catch(() => {});
+      journal = undefined;
+      journalFailure = `Event log stopped: ${String(error)}`;
+      this.emit({ type: 'warning', message: journalFailure });
+    };
+    const journalWrite = (line: string) =>
+      (journalQueue = journalQueue
+        .then(async () => {
+          if (!journal) return;
+          try {
+            await journal.writeFile(line);
+          } catch {
+            try {
+              await journal.close().catch(() => {});
+              journal = await open(eventsPath, 'a', 0o600);
+              await journal.writeFile(line);
+            } catch (error) {
+              await stopJournal(error);
+            }
+          }
+        })
+        .catch(() => {}));
     try {
-      await mkdir(directory, { recursive: true, mode: 0o700 });
-      journal = await open(eventsPath, 'wx', 0o600);
+      let unopened: unknown;
+      try {
+        await mkdir(directory, { recursive: true, mode: 0o700 });
+        journal = await open(eventsPath, 'wx', 0o600);
+      } catch (error) {
+        unopened = error;
+      }
+      const journaled = journal !== undefined;
       const record = async (data: SessionEventData) => {
         const event = this.emit(data);
         // Deltas stream live. Persist finalized messages, not a full transcript for every token.
@@ -260,7 +339,7 @@ export class BrowserUse {
             ? '[image omitted from event log]'
             : value,
         );
-        await journal!.writeFile(
+        const line =
           serialized.length > 256000
             ? JSON.stringify({
                 sequence: event.sequence,
@@ -269,10 +348,11 @@ export class BrowserUse {
                 type: event.type,
                 truncated: true,
               }) + '\n'
-            : serialized + '\n',
-        );
+            : serialized + '\n';
+        await journalWrite(line);
       };
       await record({ type: 'run_start', task, followUp });
+      if (unopened !== undefined) await stopJournal(unopened); // After run_start, so it stays first.
       if (this.config.recording && !signal.aborted) {
         recorder = new Recorder(
           join(this.workspace, '.browser-use', 'recordings', this.runId),
@@ -282,7 +362,7 @@ export class BrowserUse {
         try {
           const targetId = await this.runtime.initialize(signal);
           await recorder.start(
-            this.browser.endpoint,
+            this.runtime.endpoint,
             targetId,
             this.config.browser?.kind === 'chrome' && !!this.config.browser.approveConnection,
           );
@@ -309,7 +389,28 @@ export class BrowserUse {
         {
           messages: this.messages,
           control,
-          eventsPath,
+          ...(journaled ? { eventsPath } : {}),
+          checkpoint: async (messages, usage) => {
+            recoveryCheckpoint = true;
+            this.messages = messages;
+            this.hasConversation = true;
+            const history = this.history;
+            for (const key of [
+              'input',
+              'output',
+              'cacheRead',
+              'cacheWrite',
+              'totalTokens',
+            ] as const)
+              history.usage[key] += usage[key];
+            for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const)
+              history.usage.cost[key] += usage.cost[key];
+            await saveHistory(
+              join(this.workspace, '.browser-use', 'session.json'),
+              history,
+              this.config.redact,
+            );
+          },
           save: (messages) => {
             this.messages = messages;
             this.hasConversation = true;
@@ -322,7 +423,10 @@ export class BrowserUse {
       for (const key of ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const)
         this.totalUsage.cost[key] += result.usage.cost[key];
       this.runtime.onAction = undefined;
-      const warnings: string[] = [...(result.warnings ?? [])];
+      const warnings: string[] = [
+        ...(result.warnings ?? []),
+        ...(journalFailure ? [journalFailure] : []),
+      ];
       let recordingPath: string | undefined;
       if (recorder) {
         try {
@@ -336,8 +440,19 @@ export class BrowserUse {
         ...result,
         ...(recordingPath ? { recordingPath } : {}),
         runId: this.runId,
-        eventsPath,
+        ...(journaled ? { eventsPath } : {}),
       };
+      if (recoveryCheckpoint) {
+        try {
+          await saveHistory(
+            join(this.workspace, '.browser-use', 'session.json'),
+            this.history,
+            this.config.redact,
+          );
+        } catch (error) {
+          warnings.push(`Recovery checkpoint could not be finalized: ${String(error)}`);
+        }
+      }
       try {
         await saveHistory(historyPath, this.history, this.config.redact);
         delivered.historyPath = historyPath;
@@ -345,28 +460,22 @@ export class BrowserUse {
         warnings.push(`History could not be saved: ${String(error)}`);
       }
       if (warnings.length) delivered.warnings = warnings;
-      try {
-        await record({ type: 'run_end', result: delivered });
-      } catch (error) {
-        delivered.warnings = [
-          ...(delivered.warnings ?? []),
-          `Event log could not be finalized: ${String(error)}`,
-        ];
-      }
+      await record({ type: 'run_end', result: delivered });
+      // A journal that failed on run_end itself is reported here; earlier failures are in warnings.
+      if (journalFailure && !delivered.warnings?.includes(journalFailure))
+        delivered.warnings = [...(delivered.warnings ?? []), journalFailure];
       this.reportRun(delivered);
       return redact(delivered, this.config.redact ?? []);
     } finally {
       this.runtime.onAction = undefined;
       await this.manualCell?.catch(() => {});
       if (recorder) await recorder.stop('error', this.runtime.currentTarget).catch(() => {});
-      try {
-        await journal?.close();
-      } finally {
-        control.finish();
-        this.active = false;
-        this.controller = undefined;
-        this.control = undefined;
-      }
+      await journalQueue.catch(() => {});
+      await journal?.close().catch(() => {});
+      control.finish();
+      this.active = false;
+      this.controller = undefined;
+      this.control = undefined;
     }
   }
 
@@ -386,10 +495,11 @@ export class BrowserUse {
     return event;
   }
 
-  /** Subscribe before starting work. Iterators finish when the session closes. */
-  events(): EventStream {
+  /** Subscribe before starting work. Iterators finish when the session closes.
+   * `accept` drops events before they count against the stream's bounds. */
+  events(accept?: (event: SessionEvent) => boolean): EventStream {
     if (this.closed) throw new Error('BrowserUse is closed.');
-    const stream = new EventStream(() => this.streams.delete(stream));
+    const stream = new EventStream(() => this.streams.delete(stream), 256, accept);
     this.streams.add(stream);
     return stream;
   }
@@ -475,15 +585,30 @@ export class BrowserUse {
       );
   }
 
+  /** Attach the browser of a session created with Browser.pending(). The model may already
+   * be running; its first browser cell waits for this. */
+  connectBrowser(cdpUrl: string, options: { targetId?: string } = {}) {
+    if (this.config.browser?.kind !== 'pending')
+      throw new Error('connectBrowser() needs a session created with Browser.pending().');
+    if (options.targetId !== undefined && typeof options.targetId !== 'string')
+      throw new Error('targetId must be a string.');
+    this.runtime.connect(validCdpUrl(cdpUrl), options.targetId);
+  }
+
+  /** The tab the agent is working in, for a host that resumes it in a later session. */
+  get currentTarget(): string | undefined {
+    return this.runtime.currentTarget;
+  }
+
   /** Idempotent. Cancels execution, closes our tab, and shuts down only browsers we launched. */
-  close(): Promise<void> {
+  close(options: { keepTabs?: boolean | 'current' } = {}): Promise<void> {
     if (this.closing) return this.closing;
     this.closed = true;
     this.cancel();
     this.closing = (async () => {
       try {
         await this.activeRun?.catch(() => {});
-        await this.runtime.close();
+        await this.runtime.close(options);
       } finally {
         try {
           await this.browser.close();

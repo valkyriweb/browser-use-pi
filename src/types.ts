@@ -14,6 +14,13 @@ import type { DomainOptions, SensitiveData } from './policy.js';
 import type { BrowserOptions } from './browser.js';
 
 export interface BrowserUseOptions extends DomainOptions {
+  /** 'ultrafast' adds the `bu` helpers (page state and actions by accessibility-tree id, short page-settle waits) to the REPL. */
+  mode?: 'default' | 'ultrafast';
+  /**
+   * A search endpoint with Browser Use Cloud's /api/v4/search contract; the prompt teaches the model to fetch it.
+   * The model's code can read the token (as the cloud agent's shell can), so pass a run-scoped one.
+   */
+  webSearch?: { url: string; token: string };
   sensitiveData?: SensitiveData;
   /** Anonymous run counters. Disable with false, DO_NOT_TRACK=1 or ANONYMIZED_TELEMETRY=false. */
   telemetry?: boolean;
@@ -27,6 +34,16 @@ export interface BrowserUseOptions extends DomainOptions {
   reasoning?: ThinkingLevel;
   /** Opt-in Pi read/write/edit/bash tools. Not a filesystem sandbox. */
   researchTools?: boolean;
+  /** Extra environment for the research bash tool, e.g. a host's API credentials. */
+  shellEnv?: Record<string, string>;
+  /** Longest a research bash command may run; commands default to two minutes within it. */
+  shellTimeoutMs?: number;
+  /** Let the agent move to another browser with reconnect(cdpUrl), e.g. one the host provisioned. */
+  browserSwitching?: boolean;
+  /** The browser is the agent's alone (e.g. a host-provisioned cloud browser): its empty tab is taken over instead of opening another. */
+  dedicatedBrowser?: boolean;
+  /** Activate the tab the agent drives after each cell, for hosts that act on the focused tab. */
+  focusTab?: boolean;
   tools?: AgentState['tools'];
   instructions?: string;
   operationTimeoutMs?: number;
@@ -35,6 +52,8 @@ export interface BrowserUseOptions extends DomainOptions {
   modelTimeoutMs?: number;
   /** Whole compaction response. Default 120000 ms; original context survives failure. */
   compactionTimeoutMs?: number;
+  /** Initial context-recovery backoff; doubles up to 30 seconds within the run deadline. */
+  compactionRetryDelayMs?: number;
   maxOutputChars?: number;
   /** Before each tool call. Return {block:true, reason} to deny it. */
   beforeToolCall?: (
@@ -66,7 +85,13 @@ export interface RunOptions {
   maxCostUsd?: number;
   /** Automatically summarize older context with Pi; false retains hard-stop behavior. */
   compaction?: boolean;
+  /** Explicit character cap; defaults to four characters per model context token. */
   maxContextChars?: number;
+  /** Durability barrier after the local checkpoint; failures retry within run budgets before inference. */
+  onContextRecovery?: (
+    event: { state: 'waiting' | 'resumed'; context: ContextMetrics },
+    signal?: AbortSignal,
+  ) => void | Promise<void>;
   signal?: AbortSignal;
   /** Best-effort nonblocking observations. Coalesces under load; honor the abort signal. */
   observe?: (event: AgentEvent, signal: AbortSignal) => void | Promise<void>;
@@ -76,7 +101,17 @@ export interface RunOptions {
 }
 export type StopReason =
   'max_steps' | 'timeout' | 'cancelled' | 'cost_limit' | 'context_limit' | 'incomplete' | 'error';
+export interface ContextMetrics {
+  chars: number;
+  tokens: number;
+  maxChars: number;
+  maxTokens: number;
+  compactionFailures: number;
+  lastCompactionFailure?: 'timeout' | 'not_reduced' | 'error';
+  beforeCompaction?: { chars: number; tokens: number };
+}
 export interface RunMetrics {
+  context?: ContextMetrics;
   /** Additional delivery-only model turns, within the original budgets (0 or 1). */
   finishRepairs: number;
   compactions?: number;
